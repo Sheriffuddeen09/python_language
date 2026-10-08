@@ -508,11 +508,7 @@ def health():
         "installed_languages": installed_languages,
     }
 
-
-# ============================================================
-# LANGUAGES
-# ============================================================
-
+ 
 @app.get("/languages")
 def languages():
 
@@ -527,12 +523,7 @@ def languages():
             for data in LANGUAGES.values()
         ],
     }
-
-
-# ============================================================
-# INSTALLED PACKAGES
-# ============================================================
-
+ 
 @app.get("/installed")
 def installed():
 
@@ -570,11 +561,7 @@ def installed():
             detail=str(e),
         )
 
-
-# ============================================================
-# TRANSLATE
-# ============================================================
-
+ 
 @app.post("/translate")
 def translate(request: TranslationRequest):
 
@@ -615,7 +602,6 @@ def translate(request: TranslationRequest):
             ),
         )
 
-    # Same language.
 
     if source_code == target_code:
 
@@ -626,12 +612,7 @@ def translate(request: TranslationRequest):
             "translation": text,
         }
 
-    # --------------------------------------------------------
-    # Only one translation operation at a time.
-    #
-    # This is important for a 512 MB instance.
-    # --------------------------------------------------------
-
+   
     with translation_lock:
 
         translation = install_language_pair(
@@ -657,7 +638,6 @@ def translate(request: TranslationRequest):
                 detail="Translation failed.",
             )
 
-        # Give Python a chance to release temporary objects.
 
         gc.collect()
 
