@@ -1,386 +1,511 @@
+import gc
+import os
+from pathlib import Path
+from threading import Lock
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-import torch
 
+import argostranslate.package
+import argostranslate.translate
+
+
+# ============================================================
+# APP
+# ============================================================
 
 app = FastAPI(
     title="Islam Path of Knowledge Translation Service",
-    version="1.0.0",
+    version="3.0.0",
 )
 
 
-MODEL_NAME = "facebook/nllb-200-distilled-600M"
-
-
 # ============================================================
-# DEVICE
+# CONFIG
 # ============================================================
 
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
+BASE_DIR = Path(__file__).resolve().parent
+
+# Store Argos models inside the Render service directory.
+# This keeps everything together and makes the location predictable.
+ARGOS_DIR = BASE_DIR / "argos_packages"
+
+ARGOS_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
 )
 
-print("==========================================")
-print("Islam Path of Knowledge Translation Service")
-print("==========================================")
-print(f"Model: {MODEL_NAME}")
-print(f"Using device: {device}")
+os.environ["ARGOS_PACKAGE_DIR"] = str(ARGOS_DIR)
 
 
 # ============================================================
-# LOAD MODEL
+# LOCK
 # ============================================================
 
-print("Loading NLLB tokenizer...")
-
-tokenizer = AutoTokenizer.from_pretrained(
-    MODEL_NAME
-)
-
-print("Loading NLLB model...")
-
-model = AutoModelForSeq2SeqLM.from_pretrained(
-    MODEL_NAME
-)
-
-model.to(device)
-model.eval()
-
-print("NLLB model loaded successfully.")
-print("==========================================")
+translation_lock = Lock()
 
 
 # ============================================================
-# NLLB LANGUAGES
+# LANGUAGE LIST
 # ============================================================
 
-NLLB_LANGUAGES = {
-    "ace_Arab": "Acehnese (Arabic)",
-    "ace_Latn": "Acehnese (Latin)",
-    "acm_Arab": "Mesopotamian Arabic",
-    "acq_Arab": "Ta'izzi-Adeni Arabic",
-    "aeb_Arab": "Tunisian Arabic",
-    "afr_Latn": "Afrikaans",
-    "ajp_Arab": "South Levantine Arabic",
-    "aka_Latn": "Akan",
-    "als_Latn": "Tosk Albanian",
-    "amh_Ethi": "Amharic",
-    "apc_Arab": "North Levantine Arabic",
-    "arb_Arab": "Modern Standard Arabic",
-    "ars_Arab": "Najdi Arabic",
-    "ary_Arab": "Moroccan Arabic",
-    "arz_Arab": "Egyptian Arabic",
-    "asm_Beng": "Assamese",
-    "ast_Latn": "Asturian",
-    "awa_Deva": "Awadhi",
-    "ayr_Latn": "Central Aymara",
-    "azb_Arab": "South Azerbaijani",
-    "azj_Latn": "North Azerbaijani",
-    "bak_Cyrl": "Bashkir",
-    "bam_Latn": "Bambara",
-    "ban_Latn": "Balinese",
-    "bel_Cyrl": "Belarusian",
-    "bem_Latn": "Bemba",
-    "ben_Beng": "Bengali",
-    "bho_Deva": "Bhojpuri",
-    "bjn_Arab": "Banjar (Arabic)",
-    "bjn_Latn": "Banjar (Latin)",
-    "bod_Tibt": "Tibetan",
-    "bos_Latn": "Bosnian",
-    "bug_Latn": "Buginese",
-    "bul_Cyrl": "Bulgarian",
-    "cat_Latn": "Catalan",
-    "ceb_Latn": "Cebuano",
-    "ces_Latn": "Czech",
-    "cjk_Latn": "Chokwe",
-    "ckb_Arab": "Central Kurdish",
-    "cmn_Hans": "Chinese (Simplified)",
-    "cmn_Hant": "Chinese (Traditional)",
-    "crh_Latn": "Crimean Tatar",
-    "cym_Latn": "Welsh",
-    "dan_Latn": "Danish",
-    "deu_Latn": "German",
-    "dik_Latn": "Southwestern Dinka",
-    "dyu_Latn": "Dyula",
-    "dzo_Tibt": "Dzongkha",
-    "ell_Grek": "Greek",
-    "eng_Latn": "English",
-    "epo_Latn": "Esperanto",
-    "est_Latn": "Estonian",
-    "eus_Latn": "Basque",
-    "ewe_Latn": "Ewe",
-    "fao_Latn": "Faroese",
-    "fij_Latn": "Fijian",
-    "fin_Latn": "Finnish",
-    "fon_Latn": "Fon",
-    "fra_Latn": "French",
-    "fur_Latn": "Friulian",
-    "fuv_Latn": "Nigerian Fulfulde",
-    "gaz_Latn": "West Central Oromo",
-    "gla_Latn": "Scottish Gaelic",
-    "gle_Latn": "Irish",
-    "glg_Latn": "Galician",
-    "grn_Latn": "Guarani",
-    "guj_Gujr": "Gujarati",
-    "hat_Latn": "Haitian Creole",
-    "heb_Hebr": "Hebrew",
-    "hin_Deva": "Hindi",
-    "hne_Deva": "Chhattisgarhi",
-    "hrv_Latn": "Croatian",
-    "hun_Latn": "Hungarian",
-    "hye_Armn": "Armenian",
-    "ibo_Latn": "Igbo",
-    "ilo_Latn": "Ilocano",
-    "ind_Latn": "Indonesian",
-    "isl_Latn": "Icelandic",
-    "ita_Latn": "Italian",
-    "jav_Latn": "Javanese",
-    "jpn_Jpan": "Japanese",
-    "kab_Latn": "Kabyle",
-    "kac_Latn": "Kachin",
-    "kam_Latn": "Kamba",
-    "kan_Knda": "Kannada",
-    "kas_Arab": "Kashmiri (Arabic)",
-    "kas_Deva": "Kashmiri (Devanagari)",
-    "kat_Geor": "Georgian",
-    "knc_Arab": "Central Kanuri (Arabic)",
-    "knc_Latn": "Central Kanuri (Latin)",
-    "kaz_Cyrl": "Kazakh",
-    "kbp_Latn": "Kabiye",
-    "kea_Latn": "Kabuverdianu",
-    "khm_Khmr": "Khmer",
-    "kik_Latn": "Kikuyu",
-    "kin_Latn": "Kinyarwanda",
-    "kir_Cyrl": "Kyrgyz",
-    "kmb_Latn": "Kimbundu",
-    "kmr_Latn": "Northern Kurdish",
-    "kon_Latn": "Kongo",
-    "kor_Hang": "Korean",
-    "lao_Laoo": "Lao",
-    "lij_Latn": "Ligurian",
-    "lim_Latn": "Limburgish",
-    "lin_Latn": "Lingala",
-    "lit_Latn": "Lithuanian",
-    "lmo_Latn": "Lombard",
-    "ltg_Latn": "Latgalian",
-    "ltz_Latn": "Luxembourgish",
-    "lua_Latn": "Luba-Kasai",
-    "lug_Latn": "Ganda",
-    "luo_Latn": "Luo",
-    "lus_Latn": "Mizo",
-    "lvs_Latn": "Standard Latvian",
-    "mag_Deva": "Magahi",
-    "mai_Deva": "Maithili",
-    "mal_Mlym": "Malayalam",
-    "mar_Deva": "Marathi",
-    "min_Latn": "Minangkabau",
-    "mkd_Cyrl": "Macedonian",
-    "mlt_Latn": "Maltese",
-    "mni_Beng": "Meitei",
-    "mos_Latn": "Mossi",
-    "mri_Latn": "Maori",
-    "mya_Mymr": "Burmese",
-    "nld_Latn": "Dutch",
-    "nno_Latn": "Norwegian Nynorsk",
-    "nob_Latn": "Norwegian Bokmål",
-    "npi_Deva": "Nepali",
-    "nso_Latn": "Northern Sotho",
-    "nus_Latn": "Nuer",
-    "nya_Latn": "Chichewa",
-    "oci_Latn": "Occitan",
-    "ory_Orya": "Odia",
-    "pag_Latn": "Pangasinan",
-    "pan_Guru": "Punjabi",
-    "pap_Latn": "Papiamento",
-    "pbt_Arab": "Southern Pashto",
-    "pes_Arab": "Iranian Persian",
-    "plt_Latn": "Plateau Malagasy",
-    "pol_Latn": "Polish",
-    "por_Latn": "Portuguese",
-    "prs_Arab": "Dari",
-    "quy_Latn": "Quechua",
-    "ron_Latn": "Romanian",
-    "run_Latn": "Rundi",
-    "rus_Cyrl": "Russian",
-    "sag_Latn": "Sango",
-    "san_Deva": "Sanskrit",
-    "sat_Olck": "Santali",
-    "scn_Latn": "Sicilian",
-    "shn_Mymr": "Shan",
-    "sin_Sinh": "Sinhala",
-    "slk_Latn": "Slovak",
-    "slv_Latn": "Slovenian",
-    "smo_Latn": "Samoan",
-    "sna_Latn": "Shona",
-    "snd_Arab": "Sindhi",
-    "som_Latn": "Somali",
-    "sot_Latn": "Southern Sotho",
-    "spa_Latn": "Spanish",
-    "srd_Latn": "Sardinian",
-    "srp_Cyrl": "Serbian",
-    "ssw_Latn": "Swati",
-    "sun_Latn": "Sundanese",
-    "swe_Latn": "Swedish",
-    "swh_Latn": "Swahili",
-    "szl_Latn": "Silesian",
-    "tam_Taml": "Tamil",
-    "taq_Latn": "Tamasheq",
-    "taq_Tfng": "Tamasheq (Tifinagh)",
-    "tat_Cyrl": "Tatar",
-    "tel_Telu": "Telugu",
-    "tgk_Cyrl": "Tajik",
-    "tha_Thai": "Thai",
-    "tir_Ethi": "Tigrinya",
-    "tpi_Latn": "Tok Pisin",
-    "tsn_Latn": "Tswana",
-    "tso_Latn": "Tsonga",
-    "tuk_Latn": "Turkmen",
-    "tum_Latn": "Tumbuka",
-    "tur_Latn": "Turkish",
-    "twi_Latn": "Twi",
-    "tzm_Tfng": "Central Atlas Tamazight",
-    "uig_Arab": "Uyghur",
-    "ukr_Cyrl": "Ukrainian",
-    "umb_Latn": "Umbundu",
-    "urd_Arab": "Urdu",
-    "uzn_Latn": "Uzbek",
-    "vec_Latn": "Venetian",
-    "vie_Latn": "Vietnamese",
-    "war_Latn": "Waray",
-    "wol_Latn": "Wolof",
-    "xho_Latn": "Xhosa",
-    "ydd_Hebr": "Eastern Yiddish",
-    "yor_Latn": "Yoruba",
-    "yue_Hant": "Cantonese",
-    "zho_Hans": "Chinese (Simplified)",
-    "zho_Hant": "Chinese (Traditional)",
-    "zsm_Latn": "Malay",
-    "zul_Latn": "Zulu",
+LANGUAGES = {
+    "english": {
+        "code": "en",
+        "name": "English",
+    },
+
+    "arabic": {
+        "code": "ar",
+        "name": "Arabic",
+    },
+
+    "french": {
+        "code": "fr",
+        "name": "French",
+    },
+
+    "spanish": {
+        "code": "es",
+        "name": "Spanish",
+    },
+
+    "german": {
+        "code": "de",
+        "name": "German",
+    },
+
+    "portuguese": {
+        "code": "pt",
+        "name": "Portuguese",
+    },
+
+    "italian": {
+        "code": "it",
+        "name": "Italian",
+    },
+
+    "turkish": {
+        "code": "tr",
+        "name": "Turkish",
+    },
+
+    "hindi": {
+        "code": "hi",
+        "name": "Hindi",
+    },
+
+    "indonesian": {
+        "code": "id",
+        "name": "Indonesian",
+    },
+
+    "russian": {
+        "code": "ru",
+        "name": "Russian",
+    },
+
+    "chinese": {
+        "code": "zh",
+        "name": "Chinese",
+    },
+
+    "japanese": {
+        "code": "ja",
+        "name": "Japanese",
+    },
+
+    "korean": {
+        "code": "ko",
+        "name": "Korean",
+    },
+
+    "dutch": {
+        "code": "nl",
+        "name": "Dutch",
+    },
+
+    "swedish": {
+        "code": "sv",
+        "name": "Swedish",
+    },
+
+    "ukrainian": {
+        "code": "uk",
+        "name": "Ukrainian",
+    },
+
+    "polish": {
+        "code": "pl",
+        "name": "Polish",
+    },
+
+    "greek": {
+        "code": "el",
+        "name": "Greek",
+    },
+
+    "hebrew": {
+        "code": "he",
+        "name": "Hebrew",
+    },
+
+    "persian": {
+        "code": "fa",
+        "name": "Persian",
+    },
+
+    "urdu": {
+        "code": "ur",
+        "name": "Urdu",
+    },
+
+    "swahili": {
+        "code": "sw",
+        "name": "Swahili",
+    },
 }
 
 
 # ============================================================
-# LANGUAGE LOOKUP TABLES
+# ALIASES
 # ============================================================
-
-LANGUAGE_NAMES = {
-    code.lower(): name
-    for code, name in NLLB_LANGUAGES.items()
-}
-
-
-LANGUAGE_CODES_BY_NAME = {
-    name.lower(): code
-    for code, name in NLLB_LANGUAGES.items()
-}
-
 
 LANGUAGE_ALIASES = {
-    "chinese": "zho_Hans",
-    "mandarin": "zho_Hans",
-    "simplified chinese": "zho_Hans",
-    "traditional chinese": "zho_Hant",
+    "en": "en",
+    "english": "en",
 
-    "persian": "pes_Arab",
-    "farsi": "pes_Arab",
+    "ar": "ar",
+    "arabic": "ar",
 
-    "igbo": "ibo_Latn",
-    "yoruba": "yor_Latn",
-    "hausa": "hau_Latn",
-    "arabic": "arb_Arab",
-    "english": "eng_Latn",
-    "french": "fra_Latn",
-    "spanish": "spa_Latn",
-    "german": "deu_Latn",
-    "portuguese": "por_Latn",
-    "turkish": "tur_Latn",
-    "urdu": "urd_Arab",
-    "swahili": "swh_Latn",
-    "amharic": "amh_Ethi",
-    "italian": "ita_Latn",
-    "dutch": "nld_Latn",
-    "russian": "rus_Cyrl",
-    "japanese": "jpn_Jpan",
-    "korean": "kor_Hang",
-    "hindi": "hin_Deva",
-    "bengali": "ben_Beng",
-    "malay": "zsm_Latn",
+    "fr": "fr",
+    "french": "fr",
+
+    "es": "es",
+    "spanish": "es",
+
+    "de": "de",
+    "german": "de",
+
+    "pt": "pt",
+    "portuguese": "pt",
+
+    "it": "it",
+    "italian": "it",
+
+    "tr": "tr",
+    "turkish": "tr",
+
+    "hi": "hi",
+    "hindi": "hi",
+
+    "id": "id",
+    "indonesian": "id",
+
+    "ru": "ru",
+    "russian": "ru",
+
+    "zh": "zh",
+    "zh-cn": "zh",
+    "chinese": "zh",
+
+    "ja": "ja",
+    "japanese": "ja",
+
+    "ko": "ko",
+    "korean": "ko",
+
+    "nl": "nl",
+    "dutch": "nl",
+
+    "sv": "sv",
+    "swedish": "sv",
+
+    "uk": "uk",
+    "ukrainian": "uk",
+
+    "pl": "pl",
+    "polish": "pl",
+
+    "el": "el",
+    "greek": "el",
+
+    "he": "he",
+    "hebrew": "he",
+
+    "fa": "fa",
+    "persian": "fa",
+    "farsi": "fa",
+
+    "ur": "ur",
+    "urdu": "ur",
+
+    "sw": "sw",
+    "swahili": "sw",
 }
 
 
 # ============================================================
-# LANGUAGE RESOLVER
+# REQUEST
 # ============================================================
 
-def resolve_language(language: str) -> str | None:
-    """
-    Convert a language name or NLLB language code
-    into the correct NLLB language code.
-    """
+class TranslationRequest(BaseModel):
+
+    text: str
+
+    source_language: str
+
+    target_language: str
+
+
+# ============================================================
+# RESOLVE LANGUAGE
+# ============================================================
+
+def resolve_language(language: str):
 
     if not isinstance(language, str):
         return None
 
-    value = language.strip()
+    value = language.strip().lower()
 
-    if not value:
+    return LANGUAGE_ALIASES.get(value)
+
+
+# ============================================================
+# FIND INSTALLED TRANSLATION
+# ============================================================
+
+def get_translation(source_code, target_code):
+
+    try:
+
+        translation = (
+            argostranslate.translate
+            .get_translation_from_codes(
+                source_code,
+                target_code,
+            )
+        )
+
+        return translation
+
+    except Exception:
+
         return None
 
-    # Exact NLLB code
-    if value in NLLB_LANGUAGES:
-        return value
 
-    lower_value = value.lower()
+# ============================================================
+# INSTALL LANGUAGE PAIR
+# ============================================================
 
-    # Case-insensitive NLLB code
-    if lower_value in LANGUAGE_NAMES:
-        for code in NLLB_LANGUAGES:
-            if code.lower() == lower_value:
-                return code
+def install_language_pair(
+    source_code,
+    target_code,
+):
 
-    # Full language name
-    if lower_value in LANGUAGE_CODES_BY_NAME:
-        return LANGUAGE_CODES_BY_NAME[lower_value]
+    print(
+        f"Checking translation package: "
+        f"{source_code} -> {target_code}"
+    )
 
-    # Common aliases
-    if lower_value in LANGUAGE_ALIASES:
-        return LANGUAGE_ALIASES[lower_value]
+    # First check if already installed.
 
-    return None
+    translation = get_translation(
+        source_code,
+        target_code,
+    )
+
+    if translation is not None:
+
+        print(
+            f"Translation package already installed: "
+            f"{source_code} -> {target_code}"
+        )
+
+        return translation
+
+    print("Updating Argos package index...")
+
+    try:
+
+        argostranslate.package.update_package_index()
+
+    except Exception as e:
+
+        print(
+            "Could not update Argos package index:",
+            str(e),
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Translation package index could not "
+                "be downloaded."
+            ),
+        )
+
+    available_packages = (
+        argostranslate.package
+        .get_available_packages()
+    )
+
+    package = None
+
+    # Direct language pair.
+
+    for available_package in available_packages:
+
+        if (
+            available_package.from_code
+            == source_code
+            and
+            available_package.to_code
+            == target_code
+        ):
+
+            package = available_package
+
+            break
+
+    if package is None:
+
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No direct offline translation package "
+                f"exists for {source_code} -> {target_code}."
+            ),
+        )
+
+    print(
+        f"Downloading translation package: "
+        f"{source_code} -> {target_code}"
+    )
+
+    try:
+
+        package_path = package.download()
+
+        print(
+            "Installing translation package..."
+        )
+
+        argostranslate.package.install_from_path(
+            package_path
+        )
+
+        # Remove downloaded archive after installation
+        # to reduce disk usage.
+
+        try:
+
+            package_path.unlink(
+                missing_ok=True
+            )
+
+        except Exception:
+            pass
+
+    except Exception as e:
+
+        print(
+            "Translation package installation failed:",
+            str(e),
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not install the translation "
+                "language package."
+            ),
+        )
+
+    # Refresh language list.
+
+    try:
+
+        argostranslate.translate.get_installed_languages.cache_clear()
+
+    except Exception:
+        pass
+
+    translation = get_translation(
+        source_code,
+        target_code,
+    )
+
+    if translation is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Translation package was installed "
+                "but could not be loaded."
+            ),
+        )
+
+    print(
+        f"Translation package ready: "
+        f"{source_code} -> {target_code}"
+    )
+
+    return translation
 
 
 # ============================================================
-# REQUEST MODEL
-# ============================================================
-
-class TranslationRequest(BaseModel):
-    text: str
-    source_language: str
-    target_language: str = "english"
-
-
-# ============================================================
-# ROOT / HEALTH
+# ROOT
 # ============================================================
 
 @app.get("/")
 def root():
+
     return {
         "success": True,
-        "service": "Islam Path of Knowledge Translation Service",
+        "service": (
+            "Islam Path of Knowledge "
+            "Translation Service"
+        ),
         "status": "running",
+        "engine": "Argos Translate",
+        "offline_model": True,
     }
 
 
+# ============================================================
+# HEALTH
+# ============================================================
+
 @app.get("/health")
 def health():
+
+    try:
+
+        installed = (
+            argostranslate.translate
+            .get_installed_languages()
+        )
+
+        installed_languages = [
+            {
+                "code": language.code,
+                "name": language.name,
+            }
+            for language in installed
+        ]
+
+    except Exception:
+
+        installed_languages = []
+
     return {
         "success": True,
         "service": "translation",
-        "model": MODEL_NAME,
-        "device": str(device),
-        "language_count": len(NLLB_LANGUAGES),
+        "engine": "Argos Translate",
+        "offline_model": True,
+        "installed_languages": installed_languages,
     }
 
 
@@ -390,21 +515,64 @@ def health():
 
 @app.get("/languages")
 def languages():
+
     return {
         "success": True,
-        "count": len(NLLB_LANGUAGES),
+        "count": len(LANGUAGES),
         "languages": [
             {
-                "code": code,
-                "name": name,
+                "name": data["name"],
+                "code": data["code"],
             }
-            for code, name in NLLB_LANGUAGES.items()
+            for data in LANGUAGES.values()
         ],
     }
 
 
 # ============================================================
-# TRANSLATION
+# INSTALLED PACKAGES
+# ============================================================
+
+@app.get("/installed")
+def installed():
+
+    try:
+
+        packages = (
+            argostranslate.package
+            .get_installed_packages()
+        )
+
+        result = []
+
+        for package in packages:
+
+            result.append(
+                {
+                    "from": package.from_code,
+                    "from_name": package.from_name,
+                    "to": package.to_code,
+                    "to_name": package.to_name,
+                    "version": package.package_version,
+                }
+            )
+
+        return {
+            "success": True,
+            "count": len(result),
+            "packages": result,
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
+
+
+# ============================================================
+# TRANSLATE
 # ============================================================
 
 @app.post("/translate")
@@ -413,20 +581,18 @@ def translate(request: TranslationRequest):
     text = request.text.strip()
 
     if not text:
+
         raise HTTPException(
             status_code=422,
             detail="Text is required.",
         )
 
-    # --------------------------------------------------------
-    # Resolve source language
-    # --------------------------------------------------------
-
-    source_language = resolve_language(
+    source_code = resolve_language(
         request.source_language
     )
 
-    if not source_language:
+    if source_code is None:
+
         raise HTTPException(
             status_code=422,
             detail=(
@@ -435,15 +601,12 @@ def translate(request: TranslationRequest):
             ),
         )
 
-    # --------------------------------------------------------
-    # Resolve target language
-    # --------------------------------------------------------
-
-    target_language = resolve_language(
+    target_code = resolve_language(
         request.target_language
     )
 
-    if not target_language:
+    if target_code is None:
+
         raise HTTPException(
             status_code=422,
             detail=(
@@ -452,106 +615,55 @@ def translate(request: TranslationRequest):
             ),
         )
 
-    # --------------------------------------------------------
-    # Same language
-    # --------------------------------------------------------
+    # Same language.
 
-    if source_language == target_language:
+    if source_code == target_code:
+
         return {
             "success": True,
-            "source_language": source_language,
-            "source_language_name": NLLB_LANGUAGES[
-                source_language
-            ],
-            "target_language": target_language,
-            "target_language_name": NLLB_LANGUAGES[
-                target_language
-            ],
+            "source_language": source_code,
+            "target_language": target_code,
             "translation": text,
         }
 
     # --------------------------------------------------------
-    # Translate
+    # Only one translation operation at a time.
+    #
+    # This is important for a 512 MB instance.
     # --------------------------------------------------------
 
-    try:
+    with translation_lock:
 
-        print(
-            f"Translating "
-            f"{source_language} -> {target_language}"
+        translation = install_language_pair(
+            source_code,
+            target_code,
         )
 
-        # Tell NLLB what language the input is written in
-        tokenizer.src_lang = source_language
+        try:
 
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-        )
-
-        # Move tensors to CPU/GPU
-        inputs = {
-            key: value.to(device)
-            for key, value in inputs.items()
-        }
-
-        # Target language token
-        forced_bos_token_id = tokenizer.convert_tokens_to_ids(
-            target_language
-        )
-
-        if forced_bos_token_id is None:
-            raise ValueError(
-                f"Unable to find target language token: "
-                f"{target_language}"
+            translated_text = translation.translate(
+                text
             )
 
-        # Generate translation
-        with torch.no_grad():
+        except Exception as e:
 
-            translated_tokens = model.generate(
-                **inputs,
-                forced_bos_token_id=forced_bos_token_id,
-                max_length=512,
-                num_beams=4,
+            print(
+                "Translation failed:",
+                str(e),
             )
 
-        # Convert generated tokens back to text
-        translation = tokenizer.batch_decode(
-            translated_tokens,
-            skip_special_tokens=True,
-        )[0]
+            raise HTTPException(
+                status_code=500,
+                detail="Translation failed.",
+            )
 
-        translation = translation.strip()
+        # Give Python a chance to release temporary objects.
 
-        print("Translation completed.")
+        gc.collect()
 
-        return {
-            "success": True,
-            "source_language": source_language,
-            "source_language_name": NLLB_LANGUAGES[
-                source_language
-            ],
-            "target_language": target_language,
-            "target_language_name": NLLB_LANGUAGES[
-                target_language
-            ],
-            "translation": translation,
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-
-        print(
-            "Translation error:",
-            str(e),
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail="Translation failed.",
-        )
+    return {
+        "success": True,
+        "source_language": source_code,
+        "target_language": target_code,
+        "translation": translated_text,
+    }
