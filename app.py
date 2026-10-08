@@ -13,22 +13,33 @@ app = FastAPI(
 MODEL_NAME = "facebook/nllb-200-distilled-600M"
 
 
-print("Loading NLLB model...")
-print(f"Model: {MODEL_NAME}")
+# ============================================================
+# DEVICE
+# ============================================================
 
- 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
 
+print("==========================================")
+print("Islam Path of Knowledge Translation Service")
+print("==========================================")
+print(f"Model: {MODEL_NAME}")
 print(f"Using device: {device}")
 
- 
+
+# ============================================================
+# LOAD MODEL
+# ============================================================
+
+print("Loading NLLB tokenizer...")
+
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME
 )
 
- 
+print("Loading NLLB model...")
+
 model = AutoModelForSeq2SeqLM.from_pretrained(
     MODEL_NAME
 )
@@ -36,10 +47,14 @@ model = AutoModelForSeq2SeqLM.from_pretrained(
 model.to(device)
 model.eval()
 
-
 print("NLLB model loaded successfully.")
+print("==========================================")
 
- 
+
+# ============================================================
+# NLLB LANGUAGES
+# ============================================================
+
 NLLB_LANGUAGES = {
     "ace_Arab": "Acehnese (Arabic)",
     "ace_Latn": "Acehnese (Latin)",
@@ -245,10 +260,15 @@ NLLB_LANGUAGES = {
 }
 
 
+# ============================================================
+# LANGUAGE LOOKUP TABLES
+# ============================================================
+
 LANGUAGE_NAMES = {
     code.lower(): name
     for code, name in NLLB_LANGUAGES.items()
 }
+
 
 LANGUAGE_CODES_BY_NAME = {
     name.lower(): code
@@ -261,8 +281,10 @@ LANGUAGE_ALIASES = {
     "mandarin": "zho_Hans",
     "simplified chinese": "zho_Hans",
     "traditional chinese": "zho_Hant",
+
     "persian": "pes_Arab",
     "farsi": "pes_Arab",
+
     "igbo": "ibo_Latn",
     "yoruba": "yor_Latn",
     "hausa": "hau_Latn",
@@ -287,32 +309,50 @@ LANGUAGE_ALIASES = {
 }
 
 
+# ============================================================
+# LANGUAGE RESOLVER
+# ============================================================
+
 def resolve_language(language: str) -> str | None:
     """
-    Convert a language name/code into an NLLB language code.
+    Convert a language name or NLLB language code
+    into the correct NLLB language code.
     """
+
+    if not isinstance(language, str):
+        return None
 
     value = language.strip()
 
     if not value:
         return None
 
+    # Exact NLLB code
     if value in NLLB_LANGUAGES:
         return value
 
     lower_value = value.lower()
 
+    # Case-insensitive NLLB code
     if lower_value in LANGUAGE_NAMES:
-        return lower_value
+        for code in NLLB_LANGUAGES:
+            if code.lower() == lower_value:
+                return code
 
+    # Full language name
     if lower_value in LANGUAGE_CODES_BY_NAME:
         return LANGUAGE_CODES_BY_NAME[lower_value]
 
+    # Common aliases
     if lower_value in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[lower_value]
 
     return None
 
+
+# ============================================================
+# REQUEST MODEL
+# ============================================================
 
 class TranslationRequest(BaseModel):
     text: str
@@ -320,9 +360,21 @@ class TranslationRequest(BaseModel):
     target_language: str = "english"
 
 
+# ============================================================
+# ROOT / HEALTH
+# ============================================================
+
+@app.get("/")
+def root():
+    return {
+        "success": True,
+        "service": "Islam Path of Knowledge Translation Service",
+        "status": "running",
+    }
+
+
 @app.get("/health")
 def health():
-
     return {
         "success": True,
         "service": "translation",
@@ -331,9 +383,13 @@ def health():
         "language_count": len(NLLB_LANGUAGES),
     }
 
+
+# ============================================================
+# LANGUAGES
+# ============================================================
+
 @app.get("/languages")
 def languages():
-
     return {
         "success": True,
         "count": len(NLLB_LANGUAGES),
@@ -347,6 +403,10 @@ def languages():
     }
 
 
+# ============================================================
+# TRANSLATION
+# ============================================================
+
 @app.post("/translate")
 def translate(request: TranslationRequest):
 
@@ -358,12 +418,15 @@ def translate(request: TranslationRequest):
             detail="Text is required.",
         )
 
+    # --------------------------------------------------------
+    # Resolve source language
+    # --------------------------------------------------------
+
     source_language = resolve_language(
         request.source_language
     )
 
     if not source_language:
-
         raise HTTPException(
             status_code=422,
             detail=(
@@ -372,12 +435,15 @@ def translate(request: TranslationRequest):
             ),
         )
 
+    # --------------------------------------------------------
+    # Resolve target language
+    # --------------------------------------------------------
+
     target_language = resolve_language(
         request.target_language
     )
 
     if not target_language:
-
         raise HTTPException(
             status_code=422,
             detail=(
@@ -386,16 +452,27 @@ def translate(request: TranslationRequest):
             ),
         )
 
-    if source_language == target_language:
+    # --------------------------------------------------------
+    # Same language
+    # --------------------------------------------------------
 
+    if source_language == target_language:
         return {
             "success": True,
             "source_language": source_language,
-            "source_language_name": NLLB_LANGUAGES[source_language],
+            "source_language_name": NLLB_LANGUAGES[
+                source_language
+            ],
             "target_language": target_language,
-            "target_language_name": NLLB_LANGUAGES[target_language],
+            "target_language_name": NLLB_LANGUAGES[
+                target_language
+            ],
             "translation": text,
         }
+
+    # --------------------------------------------------------
+    # Translate
+    # --------------------------------------------------------
 
     try:
 
@@ -404,6 +481,7 @@ def translate(request: TranslationRequest):
             f"{source_language} -> {target_language}"
         )
 
+        # Tell NLLB what language the input is written in
         tokenizer.src_lang = source_language
 
         inputs = tokenizer(
@@ -413,15 +491,24 @@ def translate(request: TranslationRequest):
             max_length=512,
         )
 
+        # Move tensors to CPU/GPU
         inputs = {
             key: value.to(device)
             for key, value in inputs.items()
         }
 
+        # Target language token
         forced_bos_token_id = tokenizer.convert_tokens_to_ids(
             target_language
         )
 
+        if forced_bos_token_id is None:
+            raise ValueError(
+                f"Unable to find target language token: "
+                f"{target_language}"
+            )
+
+        # Generate translation
         with torch.no_grad():
 
             translated_tokens = model.generate(
@@ -431,25 +518,38 @@ def translate(request: TranslationRequest):
                 num_beams=4,
             )
 
+        # Convert generated tokens back to text
         translation = tokenizer.batch_decode(
             translated_tokens,
             skip_special_tokens=True,
         )[0]
+
+        translation = translation.strip()
 
         print("Translation completed.")
 
         return {
             "success": True,
             "source_language": source_language,
-            "source_language_name": NLLB_LANGUAGES[source_language],
+            "source_language_name": NLLB_LANGUAGES[
+                source_language
+            ],
             "target_language": target_language,
-            "target_language_name": NLLB_LANGUAGES[target_language],
+            "target_language_name": NLLB_LANGUAGES[
+                target_language
+            ],
             "translation": translation,
         }
 
+    except HTTPException:
+        raise
+
     except Exception as e:
 
-        print("Translation error:", str(e))
+        print(
+            "Translation error:",
+            str(e),
+        )
 
         raise HTTPException(
             status_code=500,
