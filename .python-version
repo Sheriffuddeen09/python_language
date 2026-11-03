@@ -1,1 +1,5 @@
 3.12
+
+.venv\Scripts\Activate.ps1
+python check_languages.py
+python install_languages.py
